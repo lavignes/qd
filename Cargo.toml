@@ -1,0 +1,31 @@
+[package]
+name = "qd"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "qd-sdl2"
+required-features = ["sdl2", "gl"]
+
+[features]
+default = ["sdl2", "gl"]
+
+[dependencies.log]
+version = "0.4"
+features = ["max_level_trace", "release_max_level_warn"]
+
+[dependencies.crossbeam-channel]
+version = "0.5"
+
+[dependencies.bytemuck]
+version = "1"
+features = ["derive"]
+
+[dependencies.sdl2]
+optional = true
+version = "0.38"
+
+[dependencies.gl]
+optional = true
+version = "0.14"
