@@ -1,6 +1,6 @@
-use crate::scene::Scene;
+use crate::scene::Query;
 
-use super::Settings;
+use super::{Settings, Target};
 
 pub struct Gl {}
 
@@ -9,5 +9,5 @@ impl Gl {
         Self {}
     }
 
-    pub fn draw(&mut self, scene: &Scene) {}
+    pub fn draw(&mut self, target: Target, query: Query) {}
 }

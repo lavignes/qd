@@ -1,7 +1,12 @@
-use crate::{math::UV2, scene::Scene};
+use crate::{math::UV2, scene::Query};
 
 #[cfg(feature = "gl")]
 mod gl;
+
+pub enum Target {
+    Screen,
+    Tex(u32),
+}
 
 #[derive(Clone, Copy)]
 pub struct Settings {
@@ -25,8 +30,8 @@ impl Gfx {
         }
     }
 
-    pub fn draw(&mut self, scene: &Scene) {
+    pub fn draw(&mut self, target: Target, query: Query) {
         #[cfg(feature = "gl")]
-        self.gl.draw(scene);
+        self.gl.draw(target, query);
     }
 }

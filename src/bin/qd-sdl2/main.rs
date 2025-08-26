@@ -1,6 +1,10 @@
 use std::time::{Duration, Instant};
 
-use qd::{gfx::Gfx, math::UV2, scene::Scene};
+use qd::{
+    gfx::{Gfx, Target},
+    math::UV2,
+    scene::{Query, Scene},
+};
 use sdl2::{
     event::Event,
     video::{GLProfile, SwapInterval},
@@ -53,7 +57,7 @@ fn main() {
             }
         }
 
-        gfx.draw(&scene);
+        gfx.draw(Target::Screen, Query::all(&scene));
         win.gl_swap_window();
 
         frames += 1.0;
