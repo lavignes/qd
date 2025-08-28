@@ -35,6 +35,7 @@ struct AsyncLogger {
 }
 
 impl Log for AsyncLogger {
+    #[inline]
     fn enabled(&self, _: &Metadata) -> bool {
         RUNNING.load(Ordering::Relaxed)
     }

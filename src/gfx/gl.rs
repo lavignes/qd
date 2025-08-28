@@ -5,6 +5,7 @@ use super::{Settings, Target};
 pub struct Gl {}
 
 impl Gl {
+    #[inline]
     pub fn new(settings: &Settings) -> Self {
         Self {}
     }

@@ -3,6 +3,7 @@ pub struct Query<'a> {
 }
 
 impl<'a> Query<'a> {
+    #[inline]
     pub fn all(scene: &'a Scene) -> Self {
         Query { scene }
     }
