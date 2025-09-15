@@ -1,9 +1,8 @@
 use std::time::{Duration, Instant};
 
 use qd::{
-    gfx::{Gfx, Target},
-    math::UV2,
-    scene::{Query, Scene},
+    gfx::{Camera, Gfx, Node, Proj, Target, Vtx},
+    math::{UV2, V3, V4, Xform3},
 };
 use sdl2::{
     event::Event,
@@ -40,7 +39,50 @@ fn main() {
     let mut gfx = Gfx::new(&qd::gfx::Settings {
         size: UV2([1920, 1080]),
     });
-    let mut scene = Scene {};
+
+    let mut camera = Camera {
+        pos: V3([-10.0, 0.0, 1.0]),
+        at: V3([-10.0, 0.0, 0.0]),
+        proj: Proj::Ortho {
+            size: UV2([1920, 1080]),
+            near: 0.0,
+            far: 10000.0,
+        },
+    };
+
+    let mesh = gfx.mesh_alloc(4, 6);
+    {
+        let (mut vmap, mut imap) = gfx.mesh_map(mesh);
+        vmap.write(&[
+            Vtx {
+                pos: V3([-10.0, -10.0, 0.0]),
+                color: V4::splat(1.0),
+                ..Default::default()
+            },
+            Vtx {
+                pos: V3([-10.0, 10.0, 0.0]),
+                color: V4::splat(1.0),
+                ..Default::default()
+            },
+            Vtx {
+                pos: V3([10.0, -10.0, 0.0]),
+                color: V4::splat(1.0),
+                ..Default::default()
+            },
+            Vtx {
+                pos: V3([10.0, 10.0, 0.0]),
+                color: V4::splat(1.0),
+                ..Default::default()
+            },
+        ]);
+        imap.write(&[0, 1, 2, 2, 1, 3]);
+    }
+
+    let tex = gfx.tex_alloc();
+    {
+        let mut tmap = gfx.tex_map(tex);
+        tmap.write(&vec![0xFFFFFFFF; 256 * 266]);
+    }
 
     let mut events = qd::ensure!(sdl.event_pump());
 
@@ -57,7 +99,17 @@ fn main() {
             }
         }
 
-        gfx.draw(Target::Screen, Query::all(&scene));
+        {
+            let mut pass = gfx.pass(Target::Screen, &camera);
+            pass.clear();
+            pass.draw(&[Node {
+                mesh,
+                tex,
+                blend: V4::splat(1.0),
+                xform: Xform3::IDENTITY,
+            }]);
+        }
+
         win.gl_swap_window();
 
         frames += 1.0;

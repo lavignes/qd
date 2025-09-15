@@ -51,7 +51,7 @@ impl Log for AsyncLogger {
                     let current = thread::current();
                     let name = current.name().unwrap_or("???");
                     let time = self.start.elapsed().as_secs_f32();
-                    if let (Some(file), Some(line)) = (record.file(), record.line()) {
+                    if let (Some(file), Some(line)) = (record.module_path(), record.line()) {
                         eprintln!(
                             "[\x1B[31mFATAL\x1B[0m] {time:09.3} <{name}> {file}:{line}: {}",
                             record.args()
@@ -75,7 +75,7 @@ impl Log for AsyncLogger {
         let current = thread::current();
         let name = current.name().unwrap_or("???");
         let time = self.start.elapsed().as_secs_f32();
-        if let (Some(file), Some(line)) = (record.file(), record.line()) {
+        if let (Some(file), Some(line)) = (record.module_path(), record.line()) {
             write!(
                 &mut buf,
                 "[{level}] {time:09.3} <{name}> {file}:{line}: {}",
