@@ -1,7 +1,10 @@
 use bytemuck::{Pod, Zeroable};
 use gl::{BufMap, TexMap};
 
-use crate::math::{Mat4, UV2, V2, V3, V4, Xform3};
+use crate::{
+    math::{Mat4, UV2, V3, V4},
+    scene::Query,
+};
 
 #[cfg(feature = "gl")]
 mod gl;
@@ -37,7 +40,7 @@ impl Gfx {
     #[inline]
     pub fn mesh_map(&mut self, hnd: u32) -> (BufMap<Vtx>, BufMap<u32>) {
         #[cfg(feature = "gl")]
-        return self.gl.mesh_map(hnd);
+        self.gl.mesh_map(hnd)
     }
 
     #[inline]
@@ -66,9 +69,9 @@ impl<'a> Pass<'a> {
     }
 
     #[inline]
-    pub fn draw(&mut self, nodes: &[Node]) {
+    pub fn draw(&mut self, query: Query<'a>) {
         #[cfg(feature = "gl")]
-        self.gl.draw(nodes);
+        self.gl.draw(query);
     }
 }
 
@@ -140,13 +143,6 @@ pub struct Vtx {
     pub norm: V3,
     pub ty: f32,
     pub color: V4,
-}
-
-pub struct Node {
-    pub mesh: u32,
-    pub tex: u32,
-    pub blend: V4,
-    pub xform: Xform3,
 }
 
 pub enum Target {

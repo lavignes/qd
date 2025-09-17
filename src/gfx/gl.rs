@@ -3,9 +3,12 @@ use std::{marker::PhantomData, mem, ops::Range, ptr};
 use bytemuck::NoUninit;
 use gl::types::{GLenum, GLint, GLintptr, GLsizei, GLsizeiptr, GLuint};
 
-use crate::math::{Cross, Dot, IV2, Mat4, UV2, V3, V4};
+use crate::{
+    math::{Cross, Dot, IV2, Mat4, V3, V4},
+    scene::Query,
+};
 
-use super::{Camera, Node, Settings, Target, Vtx};
+use super::{Camera, Settings, Target, Vtx};
 
 const VBO_SIZE: usize = 536870912;
 const IBO_SIZE: usize = 536870912;
@@ -183,8 +186,8 @@ impl<'a> Pass<'a> {
         }
     }
 
-    pub fn draw(&mut self, nodes: &[Node]) {
-        for node in nodes {
+    pub fn draw(&mut self, query: Query<'a>) {
+        for node in query {
             let (_, ihnd) = self.gl.meshes[node.mesh as usize];
             let range = &self.gl.ibo.inner.used[ihnd as usize];
             unsafe {
@@ -192,7 +195,7 @@ impl<'a> Pass<'a> {
                     self.gl.umodel,
                     1,
                     gl::TRUE,
-                    Mat4::from(node.xform).0.as_ptr() as _,
+                    Mat4::from(node.world).0.as_ptr() as _,
                 );
                 gl::Uniform1ui(self.gl.utex, node.tex);
                 gl::Uniform4fv(self.gl.ublend, 1, node.blend.0.as_ptr());

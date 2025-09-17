@@ -13,15 +13,15 @@ pub trait Cross<Rhs = Self> {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Default, Debug, Pod, Zeroable)]
 pub struct V2(pub [f32; 2]);
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Default, Debug, Pod, Zeroable)]
 pub struct IV2(pub [i32; 2]);
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Default, Debug, Pod, Zeroable)]
 pub struct UV2(pub [u32; 2]);
 
 impl V2 {
@@ -223,15 +223,15 @@ vec2_binop!(UV2, u32, Div, div);
 vec2_binop!(UV2, u32, Rem, rem);
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Default, Debug, Pod, Zeroable)]
 pub struct V3(pub [f32; 3]);
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Default, Debug, Pod, Zeroable)]
 pub struct IV3(pub [i32; 3]);
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Default, Debug, Pod, Zeroable)]
 pub struct UV3(pub [u32; 3]);
 
 impl V3 {
@@ -484,15 +484,15 @@ vec3_binop!(UV3, u32, Div, div);
 vec3_binop!(UV3, u32, Rem, rem);
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Default, Debug, Pod, Zeroable)]
 pub struct V4(pub [f32; 4]);
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Default, Debug, Pod, Zeroable)]
 pub struct IV4(pub [i32; 4]);
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Default, Debug, Pod, Zeroable)]
 pub struct UV4(pub [u32; 4]);
 
 impl V4 {

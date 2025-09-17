@@ -2,7 +2,7 @@ use std::ops::Mul;
 
 use super::{Cross, V3, V4};
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Quat(pub V4);
 
 impl Quat {

@@ -1,8 +1,9 @@
 use std::time::{Duration, Instant};
 
 use qd::{
-    gfx::{Camera, Gfx, Node, Proj, Target, Vtx},
+    gfx::{Camera, Gfx, Proj, Target, Vtx},
     math::{UV2, V3, V4, Xform3},
+    scene::{Node, Query, Scene},
 };
 use sdl2::{
     event::Event,
@@ -40,16 +41,6 @@ fn main() {
         size: UV2([1920, 1080]),
     });
 
-    let mut camera = Camera {
-        pos: V3([-10.0, 0.0, 1.0]),
-        at: V3([-10.0, 0.0, 0.0]),
-        proj: Proj::Ortho {
-            size: UV2([1920, 1080]),
-            near: 0.0,
-            far: 10000.0,
-        },
-    };
-
     let mesh = gfx.mesh_alloc(4, 6);
     {
         let (mut vmap, mut imap) = gfx.mesh_map(mesh);
@@ -81,13 +72,34 @@ fn main() {
     let tex = gfx.tex_alloc();
     {
         let mut tmap = gfx.tex_map(tex);
-        tmap.write(&vec![0xFFFFFFFF; 256 * 266]);
+        tmap.write(&vec![0xFF00FFFF; 256 * 266]);
     }
 
     let mut events = qd::ensure!(sdl.event_pump());
 
     let mut frames = 0.0;
     let mut last = Instant::now();
+
+    let mut scene = Scene::new();
+    scene.add_node(Node {
+        kid: 0,
+        sib: 0,
+        mesh,
+        tex,
+        blend: V4::splat(1.0),
+        local: Xform3::IDENTITY,
+        world: Xform3::IDENTITY,
+    });
+
+    let camera = Camera {
+        pos: V3([-10.0, 0.0, 1.0]),
+        at: V3([-10.0, 0.0, 0.0]),
+        proj: Proj::Ortho {
+            size: UV2([1920, 1080]),
+            near: 0.0,
+            far: 10000.0,
+        },
+    };
 
     'mainloop: loop {
         for event in events.poll_iter() {
@@ -99,15 +111,12 @@ fn main() {
             }
         }
 
+        scene.update();
+
         {
             let mut pass = gfx.pass(Target::Screen, &camera);
             pass.clear();
-            pass.draw(&[Node {
-                mesh,
-                tex,
-                blend: V4::splat(1.0),
-                xform: Xform3::IDENTITY,
-            }]);
+            pass.draw(Query::all(&scene));
         }
 
         win.gl_swap_window();

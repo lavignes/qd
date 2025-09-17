@@ -1,6 +1,6 @@
 use super::{Quat, V3};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Xform3 {
     pub pos: V3,
     pub scale: V3,
