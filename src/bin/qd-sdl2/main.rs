@@ -33,7 +33,7 @@ fn main() {
 
     let gl_ctx = qd::ensure!(win.gl_create_context(), "Failed to create GL context: {}");
     qd::ensure!(win.gl_make_current(&gl_ctx));
-    qd::ensure!(video.gl_set_swap_interval(SwapInterval::VSync));
+    qd::ensure!(video.gl_set_swap_interval(SwapInterval::Immediate));
 
     gl::load_with(|proc| video.gl_get_proc_address(proc) as *const _);
 
@@ -90,18 +90,24 @@ fn main() {
         draw: Drawable::None,
     });
 
-    for i in 0..10 {
+    const N: usize = 50;
+    for i in 0..N {
         let mut local = Xform3::IDENTITY;
-        local.pos = V3([(32.0 * (i as f32)), 0.0, 0.0]);
+        local.scale.0[1] = 32.0;
+        local.pos.0[0] = 32.0 * (i as f32);
         scene.add_node(Node {
             kid: Node::NONE,
-            sib: if i < 9 { i + 2 } else { Node::NONE },
+            sib: if i < (N - 1) {
+                (i + 2) as u32
+            } else {
+                Node::NONE
+            },
             local,
             world: Xform3::IDENTITY,
             draw: Drawable::Mesh {
                 hnd: mesh,
                 tex,
-                blend: V4::splat((10.0 - (i as f32)) / 10.0),
+                blend: V4::splat(((N - i) as f32) / (N as f32)),
             },
         });
     }

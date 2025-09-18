@@ -11,8 +11,9 @@ const VBO_SIZE: usize = 536870912;
 const IBO_SIZE: usize = 536870912;
 const TBO_SIZE: usize = 512;
 const TEX_DIM: usize = 256;
+
 const SBO_SIZE: usize = 512;
-const SBO_DIM: usize = 1024;
+const SBO_DIM: usize = 2048;
 
 pub struct Gl {
     vbo: Buf<Vtx>,
@@ -83,14 +84,7 @@ impl Gl {
 
         unsafe {
             gl::UseProgram(shader);
-            gl::BindVertexArray(vao);
-            gl::BindBuffer(gl::ARRAY_BUFFER, vbo.inner.hnd);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ibo.inner.hnd);
-            gl::ActiveTexture(gl::TEXTURE0);
-            gl::BindTexture(gl::TEXTURE_2D_ARRAY, tbo.hnd);
             gl::Uniform1i(utbo, 0);
-            gl::ActiveTexture(gl::TEXTURE1);
-            gl::BindTexture(gl::TEXTURE_1D_ARRAY, sbo.hnd);
             gl::Uniform1i(usbo, 1);
 
             let IV2([w, h]) = settings.size.into();
@@ -184,7 +178,7 @@ struct MeshInst {
 }
 
 struct MeshBatch {
-    range: Range<usize>,
+    hnd: u32,
     store: u32,
     insts: Vec<MeshInst>,
 }
@@ -208,24 +202,33 @@ impl<'a> Pass<'a> {
     where
         I: IntoIterator<Item = (&'b Xform3, &'b Drawable)>,
     {
-        // TODO dont clear. append to existing batches (each will be empty)
-        self.gl.mesh_batches.clear();
-
         for (world, draw) in iter.into_iter() {
             match draw {
                 Drawable::None => {}
                 Drawable::Mesh { hnd, tex, blend } => {
-                    let (_, ihnd) = self.gl.meshes[*hnd as usize];
-                    let range = &self.gl.ibo.inner.used[ihnd as usize];
+                    // TODO: not super efficient
+                    let batch = if let Some(batch) = self
+                        .gl
+                        .mesh_batches
+                        .iter_mut()
+                        // TODO: also need to check if the store is full
+                        .find(|batch| (batch.hnd == *hnd) || batch.insts.is_empty())
+                    {
+                        batch.hnd = *hnd;
+                        batch
+                    } else {
+                        self.gl.mesh_batches.push(MeshBatch {
+                            hnd: *hnd,
+                            store: 0, // TODO: need to actually allocate different stores
+                            insts: Vec::new(),
+                        });
+                        self.gl.mesh_batches.last_mut().unwrap()
+                    };
 
-                    self.gl.mesh_batches.push(MeshBatch {
-                        range: range.clone(),
-                        store: 0, // TODO: might overflow the store
-                        insts: vec![MeshInst {
-                            world: Mat4::from(world),
-                            blend: *blend,
-                            tex: V4([*tex as f32, 0.0, 0.0, 0.0]),
-                        }],
+                    batch.insts.push(MeshInst {
+                        world: Mat4::from(world).transposed(),
+                        blend: *blend,
+                        tex: V4([*tex as f32, 0.0, 0.0, 0.0]),
                     });
                 }
             }
@@ -236,13 +239,14 @@ impl<'a> Pass<'a> {
 impl<'a> Drop for Pass<'a> {
     fn drop(&mut self) {
         unsafe {
-            gl::BindTexture(gl::TEXTURE_1D_ARRAY, self.gl.sbo.hnd);
+            gl::ActiveTexture(gl::TEXTURE1);
         }
         for batch in &mut self.gl.mesh_batches {
             if batch.insts.is_empty() {
                 break;
             }
             const NUM_INST_COMPONENTS: usize = mem::size_of::<MeshInst>() / mem::size_of::<V4>();
+            let mut err;
             unsafe {
                 gl::TexSubImage2D(
                     gl::TEXTURE_1D_ARRAY,
@@ -255,16 +259,31 @@ impl<'a> Drop for Pass<'a> {
                     gl::FLOAT,
                     batch.insts.as_ptr() as _,
                 );
+                err = gl::GetError();
+            }
+            if err != gl::NO_ERROR {
+                crate::fatal!(
+                    "Failed to transfer storage handle {} to storage: {err:X}",
+                    batch.store
+                );
+            }
+            let (_, ihnd) = self.gl.meshes[batch.hnd as usize];
+            let range = &self.gl.ibo.inner.used[ihnd as usize];
+            unsafe {
                 gl::Uniform1ui(self.gl.ustore, batch.store);
                 gl::DrawElementsInstancedBaseVertex(
                     gl::TRIANGLES,
-                    (batch.range.len() / mem::size_of::<u32>()) as GLsizei,
+                    (range.len() / mem::size_of::<u32>()) as GLsizei,
                     gl::UNSIGNED_INT,
-                    ptr::without_provenance(batch.range.start),
+                    ptr::without_provenance(range.start),
                     batch.insts.len() as GLsizei,
                     // we store index values relative to their offset in the index buffer
-                    (batch.range.start / mem::size_of::<u32>()) as GLint,
+                    (range.start / mem::size_of::<u32>()) as GLint,
                 );
+                err = gl::GetError();
+            }
+            if err != gl::NO_ERROR {
+                crate::fatal!("Failed to draw batch: {err:X}");
             }
             batch.insts.clear();
         }
@@ -402,6 +421,7 @@ impl<'a> RawMap<'a> {
     fn write(&mut self, data: &[u8]) {
         let err;
         unsafe {
+            gl::BindBuffer(self.buf.target, self.buf.hnd);
             gl::BufferSubData(
                 self.buf.target,
                 self.alloc.start as GLintptr,
@@ -468,6 +488,7 @@ impl TexBuf {
             crate::fatal!("Failed to name texture: {err:X}");
         }
         unsafe {
+            gl::ActiveTexture(gl::TEXTURE0);
             gl::BindTexture(gl::TEXTURE_2D_ARRAY, hnd);
             gl::TexStorage3D(
                 gl::TEXTURE_2D_ARRAY,
@@ -553,7 +574,7 @@ impl<'a> TexMap<'a> {
     pub fn write(&mut self, data: &[u32]) {
         let err;
         unsafe {
-            gl::BindTexture(gl::TEXTURE_2D_ARRAY, self.buf.hnd);
+            gl::ActiveTexture(gl::TEXTURE0);
             gl::TexSubImage3D(
                 gl::TEXTURE_2D_ARRAY,
                 0,
@@ -605,6 +626,7 @@ impl StoreBuf {
             crate::fatal!("Failed to name storage: {err:X}");
         }
         unsafe {
+            gl::ActiveTexture(gl::TEXTURE1);
             gl::BindTexture(gl::TEXTURE_1D_ARRAY, hnd);
             gl::TexStorage2D(
                 gl::TEXTURE_1D_ARRAY,
@@ -710,7 +732,6 @@ const VSHADER: &'static str = r#"
     flat out uint tex;
     out vec2 tex_coord;
     out vec4 vtx_color;
-
 
     mat4 fetchModel(uint offset) {
         mat4 model;
