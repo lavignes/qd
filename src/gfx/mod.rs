@@ -1,10 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use gl::{BufMap, TexMap};
 
-use crate::{
-    math::{Mat4, UV2, V3, V4},
-    scene::Query,
-};
+use crate::math::{Mat4, UV2, V3, V4, Xform3};
 
 #[cfg(feature = "gl")]
 mod gl;
@@ -63,15 +60,18 @@ pub struct Pass<'a> {
 
 impl<'a> Pass<'a> {
     #[inline]
-    pub fn clear(&mut self) {
+    pub fn clear_all(&mut self) {
         #[cfg(feature = "gl")]
-        self.gl.clear();
+        self.gl.clear_all();
     }
 
     #[inline]
-    pub fn draw(&mut self, query: Query<'a>) {
+    pub fn draw<'b, I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = (&'b Xform3, &'b Drawable)>,
+    {
         #[cfg(feature = "gl")]
-        self.gl.draw(query);
+        self.gl.draw(iter);
     }
 }
 
@@ -133,6 +133,12 @@ pub struct Camera {
     pub pos: V3,
     pub at: V3,
     pub proj: Proj,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Drawable {
+    None,
+    Mesh { hnd: u32, tex: u32, blend: V4 },
 }
 
 #[repr(C)]

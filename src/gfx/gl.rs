@@ -1,48 +1,53 @@
 use std::{marker::PhantomData, mem, ops::Range, ptr};
 
-use bytemuck::NoUninit;
+use bytemuck::{NoUninit, Pod, Zeroable};
 use gl::types::{GLenum, GLint, GLintptr, GLsizei, GLsizeiptr, GLuint};
 
-use crate::{
-    math::{Cross, Dot, IV2, Mat4, V3, V4},
-    scene::Query,
-};
+use crate::math::{Cross, Dot, IV2, Mat4, V3, V4, Xform3};
 
-use super::{Camera, Settings, Target, Vtx};
+use super::{Camera, Drawable, Settings, Target, Vtx};
 
 const VBO_SIZE: usize = 536870912;
 const IBO_SIZE: usize = 536870912;
 const TBO_SIZE: usize = 512;
 const TEX_DIM: usize = 256;
+const SBO_SIZE: usize = 512;
+const SBO_DIM: usize = 1024;
 
 pub struct Gl {
     vbo: Buf<Vtx>,
     ibo: Buf<u32>,
     tbo: TexBuf,
+    sbo: StoreBuf,
     vao: GLuint,
     shader: GLuint,
 
     uproj: GLint,
     uview: GLint,
-    umodel: GLint,
-    utex: GLint,
-    ublend: GLint,
     utbo: GLint,
+    usbo: GLint,
+    ustore: GLint,
 
     meshes: Vec<(u32, u32)>,
+    mesh_batches: Vec<MeshBatch>,
 }
 
 impl Gl {
     pub fn new(settings: &Settings) -> Self {
-        log::trace!("Initializing OpenGL...");
+        log::trace!("Initializing Gfx...");
         let vbo = Buf::new(gl::ARRAY_BUFFER, VBO_SIZE);
         log::debug!("VBO: {} MiB", VBO_SIZE / 1024 / 1024);
         let ibo = Buf::new(gl::ELEMENT_ARRAY_BUFFER, IBO_SIZE);
         log::debug!("IBO: {} MiB", IBO_SIZE / 1024 / 1024);
         let tbo = TexBuf::new(TBO_SIZE);
         log::debug!(
-            "Allocation TBO: {TBO_SIZE} textures ({} MiB)",
+            "TBO: {TBO_SIZE} textures ({} MiB)",
             (TEX_DIM * TEX_DIM * mem::size_of::<u32>() * TBO_SIZE) / 1024 / 1024
+        );
+        let sbo = StoreBuf::new(SBO_SIZE);
+        log::debug!(
+            "SBO: {SBO_SIZE} stores ({} MiB)",
+            (SBO_DIM * mem::size_of::<V4>() * SBO_SIZE) / 1024 / 1024
         );
 
         let vao = create_vao();
@@ -50,35 +55,30 @@ impl Gl {
 
         let uproj;
         let uview;
-        let umodel;
-        let utex;
-        let ublend;
         let utbo;
+        let usbo;
+        let ustore;
         unsafe {
             uproj = gl::GetUniformLocation(shader, c"proj".as_ptr());
             uview = gl::GetUniformLocation(shader, c"view".as_ptr());
-            umodel = gl::GetUniformLocation(shader, c"model".as_ptr());
-            utex = gl::GetUniformLocation(shader, c"tex".as_ptr());
-            ublend = gl::GetUniformLocation(shader, c"blend".as_ptr());
             utbo = gl::GetUniformLocation(shader, c"tbo".as_ptr());
+            usbo = gl::GetUniformLocation(shader, c"sbo".as_ptr());
+            ustore = gl::GetUniformLocation(shader, c"store".as_ptr());
         }
         if uproj < 0 {
-            crate::fatal!("Failed to locate 'proj' uniform in GL shader");
+            crate::fatal!("Failed to locate 'proj' uniform in shader");
         }
         if uview < 0 {
-            crate::fatal!("Failed to locate 'view' uniform in GL shader");
-        }
-        if umodel < 0 {
-            crate::fatal!("Failed to locate 'model' uniform in GL shader");
-        }
-        if utex < 0 {
-            crate::fatal!("Failed to locate 'tex' uniform in GL shader");
-        }
-        if ublend < 0 {
-            crate::fatal!("Failed to locate 'blend' uniform in GL shader");
+            crate::fatal!("Failed to locate 'view' uniform in shader");
         }
         if utbo < 0 {
-            crate::fatal!("Failed to locate 'tbo' uniform in GL shader");
+            crate::fatal!("Failed to locate 'tbo' uniform in shader");
+        }
+        if usbo < 0 {
+            crate::fatal!("Failed to locate 'sbo' uniform in shader");
+        }
+        if ustore < 0 {
+            crate::fatal!("Failed to locate 'store' uniform in shader");
         }
 
         unsafe {
@@ -89,6 +89,9 @@ impl Gl {
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindTexture(gl::TEXTURE_2D_ARRAY, tbo.hnd);
             gl::Uniform1i(utbo, 0);
+            gl::ActiveTexture(gl::TEXTURE1);
+            gl::BindTexture(gl::TEXTURE_1D_ARRAY, sbo.hnd);
+            gl::Uniform1i(usbo, 1);
 
             let IV2([w, h]) = settings.size.into();
             gl::Viewport(0, 0, w, h);
@@ -97,22 +100,23 @@ impl Gl {
             gl::CullFace(gl::BACK);
         }
 
-        log::trace!("Initialized OpenGL");
+        log::trace!("Initialized Gfx");
         Self {
             vbo,
             ibo,
             tbo,
+            sbo,
             vao,
             shader,
 
             uproj,
             uview,
-            umodel,
-            utex,
-            ublend,
             utbo,
+            usbo,
+            ustore,
 
             meshes: Vec::new(),
+            mesh_batches: Vec::new(),
         }
     }
 
@@ -163,12 +167,26 @@ impl Gl {
 
     #[inline]
     pub fn tex_map(&mut self, hnd: u32) -> TexMap<'_> {
-        log::trace!("Mapping GL buffer handle {hnd}",);
+        log::trace!("Mapping texture handle {hnd}",);
         TexMap {
             buf: &mut self.tbo,
             hnd,
         }
     }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct MeshInst {
+    world: Mat4,
+    blend: V4,
+    tex: V4,
+}
+
+struct MeshBatch {
+    range: Range<usize>,
+    store: u32,
+    insts: Vec<MeshInst>,
 }
 
 pub struct Pass<'a> {
@@ -179,35 +197,76 @@ pub struct Pass<'a> {
 
 impl<'a> Pass<'a> {
     #[inline]
-    pub fn clear(&mut self) {
+    pub fn clear_all(&mut self) {
         unsafe {
             gl::ClearColor(0.0, 0.0, 0.0, 0.0);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
         }
     }
 
-    pub fn draw(&mut self, query: Query<'a>) {
-        for node in query {
-            let (_, ihnd) = self.gl.meshes[node.mesh as usize];
-            let range = &self.gl.ibo.inner.used[ihnd as usize];
+    pub fn draw<'b, I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = (&'b Xform3, &'b Drawable)>,
+    {
+        // TODO dont clear. append to existing batches (each will be empty)
+        self.gl.mesh_batches.clear();
+
+        for (world, draw) in iter.into_iter() {
+            match draw {
+                Drawable::None => {}
+                Drawable::Mesh { hnd, tex, blend } => {
+                    let (_, ihnd) = self.gl.meshes[*hnd as usize];
+                    let range = &self.gl.ibo.inner.used[ihnd as usize];
+
+                    self.gl.mesh_batches.push(MeshBatch {
+                        range: range.clone(),
+                        store: 0, // TODO: might overflow the store
+                        insts: vec![MeshInst {
+                            world: Mat4::from(world),
+                            blend: *blend,
+                            tex: V4([*tex as f32, 0.0, 0.0, 0.0]),
+                        }],
+                    });
+                }
+            }
+        }
+    }
+}
+
+impl<'a> Drop for Pass<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            gl::BindTexture(gl::TEXTURE_1D_ARRAY, self.gl.sbo.hnd);
+        }
+        for batch in &mut self.gl.mesh_batches {
+            if batch.insts.is_empty() {
+                break;
+            }
+            const NUM_INST_COMPONENTS: usize = mem::size_of::<MeshInst>() / mem::size_of::<V4>();
             unsafe {
-                gl::UniformMatrix4fv(
-                    self.gl.umodel,
+                gl::TexSubImage2D(
+                    gl::TEXTURE_1D_ARRAY,
+                    0,
+                    0,
+                    batch.store as GLint,
+                    (batch.insts.len() * NUM_INST_COMPONENTS) as GLsizei,
                     1,
-                    gl::TRUE,
-                    Mat4::from(node.world).0.as_ptr() as _,
+                    gl::RGBA,
+                    gl::FLOAT,
+                    batch.insts.as_ptr() as _,
                 );
-                gl::Uniform1ui(self.gl.utex, node.tex);
-                gl::Uniform4fv(self.gl.ublend, 1, node.blend.0.as_ptr());
-                gl::DrawElementsBaseVertex(
+                gl::Uniform1ui(self.gl.ustore, batch.store);
+                gl::DrawElementsInstancedBaseVertex(
                     gl::TRIANGLES,
-                    (range.len() / mem::size_of::<u32>()) as GLsizei,
+                    (batch.range.len() / mem::size_of::<u32>()) as GLsizei,
                     gl::UNSIGNED_INT,
-                    ptr::without_provenance(range.start),
+                    ptr::without_provenance(batch.range.start),
+                    batch.insts.len() as GLsizei,
                     // we store index values relative to their offset in the index buffer
-                    (range.start / mem::size_of::<u32>()) as GLint,
+                    (batch.range.start / mem::size_of::<u32>()) as GLint,
                 );
             }
+            batch.insts.clear();
         }
     }
 }
@@ -271,7 +330,7 @@ impl RawBuf {
             err = gl::GetError();
         }
         if err != gl::NO_ERROR {
-            crate::fatal!("Failed to name GL buffer: {err:X}");
+            crate::fatal!("Failed to name buffer: {err:X}");
         }
         unsafe {
             gl::BindBuffer(target, hnd);
@@ -279,7 +338,7 @@ impl RawBuf {
             err = gl::GetError();
         }
         if err != gl::NO_ERROR {
-            crate::fatal!("Failed to allocate GL buffer: {err:X}");
+            crate::fatal!("Failed to allocate buffer: {err:X}");
         }
         Self {
             hnd,
@@ -300,14 +359,14 @@ impl RawBuf {
                 return hnd as u32;
             }
         }
-        crate::fatal!("Out of contiguous GL buffer space");
+        crate::fatal!("Out of contiguous buffer space");
     }
 
     #[inline]
     fn map(&mut self, hnd: u32) -> RawMap<'_> {
         let alloc = self.used[hnd as usize].clone();
         log::trace!(
-            "Mapping GL buffer handle {hnd} ({}:{})",
+            "Mapping buffer handle {hnd} ({}:{})",
             alloc.start,
             alloc.len()
         );
@@ -328,7 +387,7 @@ impl Drop for RawBuf {
             err = gl::GetError();
         }
         if err != gl::NO_ERROR {
-            crate::fatal!("Failed to free GL buffer: {err:X}");
+            crate::fatal!("Failed to free buffer: {err:X}");
         }
     }
 }
@@ -353,7 +412,7 @@ impl<'a> RawMap<'a> {
         }
         if err != gl::NO_ERROR {
             crate::fatal!(
-                "Failed to transfer buffer handle {} ({}:{}) to GL buffer: {err:X}",
+                "Failed to transfer buffer handle {} ({}:{}) to buffer: {err:X}",
                 self.hnd,
                 self.alloc.start,
                 self.alloc.len()
@@ -366,7 +425,7 @@ impl<'a> Drop for RawMap<'a> {
     #[inline]
     fn drop(&mut self) {
         log::trace!(
-            "Unmapping GL buffer handle {} ({}:{})",
+            "Unmapping buffer handle {} ({}:{})",
             self.hnd,
             self.alloc.start,
             self.alloc.len()
@@ -406,7 +465,7 @@ impl TexBuf {
             err = gl::GetError();
         }
         if err != gl::NO_ERROR {
-            crate::fatal!("Failed to name GL texture: {err:X}");
+            crate::fatal!("Failed to name texture: {err:X}");
         }
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D_ARRAY, hnd);
@@ -421,7 +480,7 @@ impl TexBuf {
             err = gl::GetError();
         }
         if err != gl::NO_ERROR {
-            crate::fatal!("Failed to allocate GL texture: {err:X}");
+            crate::fatal!("Failed to allocate texture: {err:X}");
         }
         unsafe {
             gl::TexParameteri(
@@ -447,7 +506,7 @@ impl TexBuf {
             err = gl::GetError();
         }
         if err != gl::NO_ERROR {
-            crate::fatal!("Failed to set GL texture parameters: {err:X}");
+            crate::fatal!("Failed to set texture parameters: {err:X}");
         }
         Self {
             hnd,
@@ -467,7 +526,7 @@ impl TexBuf {
                 return hnd as u32;
             }
         }
-        crate::fatal!("Out of GL texture space");
+        crate::fatal!("Out of texture space");
     }
 }
 
@@ -480,7 +539,7 @@ impl Drop for TexBuf {
             err = gl::GetError();
         }
         if err != gl::NO_ERROR {
-            crate::fatal!("Failed to free GL texture: {err:X}");
+            crate::fatal!("Failed to free texture: {err:X}");
         }
     }
 }
@@ -494,6 +553,7 @@ impl<'a> TexMap<'a> {
     pub fn write(&mut self, data: &[u32]) {
         let err;
         unsafe {
+            gl::BindTexture(gl::TEXTURE_2D_ARRAY, self.buf.hnd);
             gl::TexSubImage3D(
                 gl::TEXTURE_2D_ARRAY,
                 0,
@@ -511,9 +571,85 @@ impl<'a> TexMap<'a> {
         }
         if err != gl::NO_ERROR {
             crate::fatal!(
-                "Failed to transfer texture handle {} to GL texture: {err:X}",
+                "Failed to transfer texture handle {} to texture: {err:X}",
                 self.hnd
             );
+        }
+    }
+}
+
+impl<'a> Drop for TexMap<'a> {
+    #[inline]
+    fn drop(&mut self) {
+        log::trace!("Unmapping texture handle {}", self.hnd);
+    }
+}
+
+struct StoreBuf {
+    hnd: GLuint,
+    len: usize,
+    cap: usize,
+    used: Vec<Range<usize>>,
+    free: Vec<Range<usize>>,
+}
+
+impl StoreBuf {
+    fn new(size: usize) -> Self {
+        let mut hnd = 0;
+        let mut err;
+        unsafe {
+            gl::GenTextures(1, &mut hnd);
+            err = gl::GetError();
+        }
+        if err != gl::NO_ERROR {
+            crate::fatal!("Failed to name storage: {err:X}");
+        }
+        unsafe {
+            gl::BindTexture(gl::TEXTURE_1D_ARRAY, hnd);
+            gl::TexStorage2D(
+                gl::TEXTURE_1D_ARRAY,
+                1,
+                gl::RGBA32F, // 1 `V4` per texel
+                SBO_DIM as GLsizei,
+                size as GLsizei,
+            );
+            err = gl::GetError();
+        }
+        if err != gl::NO_ERROR {
+            crate::fatal!("Failed to allocate storage: {err:X}");
+        }
+        Self {
+            hnd,
+            len: 0,
+            cap: size,
+            used: Vec::new(),
+            free: vec![0..size],
+        }
+    }
+
+    fn alloc(&mut self) -> u32 {
+        for alloc in self.free.iter_mut() {
+            if alloc.len() > 0 {
+                let hnd = self.used.len();
+                self.used.push(alloc.start..(alloc.start + 1));
+                alloc.start += 1;
+                return hnd as u32;
+            }
+        }
+        crate::fatal!("Out of storage space");
+    }
+}
+
+impl Drop for StoreBuf {
+    #[inline]
+    fn drop(&mut self) {
+        let err;
+        unsafe {
+            gl::DeleteTextures(1, &self.hnd);
+            err = gl::GetError();
+        }
+        if err != gl::NO_ERROR {
+            crate::fatal!("Failed to free storage: {err:X}");
         }
     }
 }
@@ -526,9 +662,9 @@ fn create_vao() -> GLuint {
         err = gl::GetError();
     }
     if err != gl::NO_ERROR {
-        crate::fatal!("Failed to name GL attribute array: {err:X}");
+        crate::fatal!("Failed to name attribute array: {err:X}");
     }
-    let stride = mem::size_of::<Vtx>() as GLsizei;
+    const STRIDE: GLsizei = mem::size_of::<Vtx>() as GLsizei;
     unsafe {
         let pos = ptr::without_provenance(bytemuck::offset_of!(Vtx, pos));
         let tx = ptr::without_provenance(bytemuck::offset_of!(Vtx, tx));
@@ -536,20 +672,20 @@ fn create_vao() -> GLuint {
         let ty = ptr::without_provenance(bytemuck::offset_of!(Vtx, ty));
         let color = ptr::without_provenance(bytemuck::offset_of!(Vtx, color));
         gl::BindVertexArray(hnd);
-        gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, stride, pos);
+        gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE, STRIDE, pos);
         gl::EnableVertexAttribArray(0);
-        gl::VertexAttribPointer(1, 1, gl::FLOAT, gl::FALSE, stride, tx);
+        gl::VertexAttribPointer(1, 1, gl::FLOAT, gl::FALSE, STRIDE, tx);
         gl::EnableVertexAttribArray(1);
-        gl::VertexAttribPointer(2, 3, gl::FLOAT, gl::FALSE, stride, norm);
+        gl::VertexAttribPointer(2, 3, gl::FLOAT, gl::FALSE, STRIDE, norm);
         gl::EnableVertexAttribArray(2);
-        gl::VertexAttribPointer(3, 1, gl::FLOAT, gl::FALSE, stride, ty);
+        gl::VertexAttribPointer(3, 1, gl::FLOAT, gl::FALSE, STRIDE, ty);
         gl::EnableVertexAttribArray(3);
-        gl::VertexAttribPointer(4, 4, gl::FLOAT, gl::FALSE, stride, color);
+        gl::VertexAttribPointer(4, 4, gl::FLOAT, gl::FALSE, STRIDE, color);
         gl::EnableVertexAttribArray(4);
         err = gl::GetError();
     }
     if err != gl::NO_ERROR {
-        crate::fatal!("Failed to configure GL attribute array: {err:X}");
+        crate::fatal!("Failed to configure attribute array: {err:X}");
     }
     hnd
 }
@@ -560,8 +696,8 @@ const VSHADER: &'static str = r#"
     uniform mat4 proj;
     uniform mat4 view;
 
-    uniform mat4 model;
-    uniform vec4 blend;
+    uniform uint store;
+    uniform sampler1DArray sbo;
 
     layout (location = 0) in vec3 pos;
     layout (location = 1) in float tx;
@@ -569,12 +705,34 @@ const VSHADER: &'static str = r#"
     layout (location = 3) in float ty;
     layout (location = 4) in vec4 color;
 
+    flat out uint tex;
     out vec2 tex_coord;
     out vec4 vtx_color;
 
+    mat4 fetchModel() {
+        mat4 model;
+        for (uint i = 0; i < 4; i++) {
+            model[i] = texelFetch(sbo, ivec2(gl_InstanceID + i, store), 0);
+        }
+        return model;
+    }
+
+    vec4 fetchBlend() {
+        return texelFetch(sbo, ivec2(gl_InstanceID + 4, store), 0);
+    }
+
+    uint fetchTex() {
+        return uint(texelFetch(sbo, ivec2(gl_InstanceID + 5, store), 0)[0]);
+    }
+
     void main() {
+        mat4 model = fetchModel();
+        vec4 blend = fetchBlend();
+
+        tex = fetchTex();
         vtx_color = color * blend;
         tex_coord = vec2(tx, ty);
+
         gl_Position = proj * view * model * vec4(pos, 1.0);
     }
 "#;
@@ -582,9 +740,9 @@ const VSHADER: &'static str = r#"
 const FSHADER: &'static str = r#"
     #version 410 core
 
-    uniform uint tex;
     uniform sampler2DArray tbo;
 
+    flat in uint tex;
     in vec2 tex_coord;
     in vec4 vtx_color;
 
@@ -603,7 +761,7 @@ fn compile_shader(kind: GLenum, src: &str) -> GLuint {
         err = gl::GetError();
     }
     if err != gl::NO_ERROR {
-        crate::fatal!("Failed to name GL shader: {err:X}");
+        crate::fatal!("Failed to name shader: {err:X}");
     }
     let mut success: GLint = 0;
     unsafe {
@@ -621,7 +779,7 @@ fn compile_shader(kind: GLenum, src: &str) -> GLuint {
         unsafe {
             gl::GetShaderInfoLog(hnd, len, ptr::null_mut(), buf.as_mut_ptr() as _);
         }
-        crate::fatal!("Failed to compile GL shader: {buf}");
+        crate::fatal!("Failed to compile shader: {buf}");
     }
     hnd
 }
@@ -633,7 +791,7 @@ fn attach_shader(program: GLuint, shader: GLuint) {
         err = gl::GetError();
     }
     if err != gl::NO_ERROR {
-        crate::fatal!("Failed to attach GL shader: {err:X}");
+        crate::fatal!("Failed to attach shader: {err:X}");
     }
 }
 
@@ -649,7 +807,7 @@ fn compile_and_link_shaders() -> GLuint {
         unsafe {
             err = gl::GetError();
         }
-        crate::fatal!("Failed to name GL program: {err:X}");
+        crate::fatal!("Failed to name program: {err:X}");
     }
     attach_shader(hnd, vshader);
     attach_shader(hnd, fshader);
@@ -667,7 +825,7 @@ fn compile_and_link_shaders() -> GLuint {
         unsafe {
             gl::GetProgramInfoLog(hnd, len, ptr::null_mut(), buf.as_mut_ptr() as _);
         }
-        crate::fatal!("Failed to link GL program: {buf}");
+        crate::fatal!("Failed to link program: {buf}");
     }
     unsafe {
         gl::DeleteShader(vshader);

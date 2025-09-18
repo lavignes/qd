@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
 
 use qd::{
-    gfx::{Camera, Gfx, Proj, Target, Vtx},
+    gfx::{Camera, Drawable, Gfx, Proj, Target, Vtx},
     math::{UV2, V3, V4, Xform3},
-    scene::{Node, Query, Scene},
+    scene::{Node, Scene},
 };
 use sdl2::{
     event::Event,
@@ -46,22 +46,22 @@ fn main() {
         let (mut vmap, mut imap) = gfx.mesh_map(mesh);
         vmap.write(&[
             Vtx {
-                pos: V3([-10.0, -10.0, 0.0]),
+                pos: V3([0.0, 0.0, 0.0]),
                 color: V4::splat(1.0),
                 ..Default::default()
             },
             Vtx {
-                pos: V3([-10.0, 10.0, 0.0]),
+                pos: V3([0.0, 32.0, 0.0]),
                 color: V4::splat(1.0),
                 ..Default::default()
             },
             Vtx {
-                pos: V3([10.0, -10.0, 0.0]),
+                pos: V3([32.0, 0.0, 0.0]),
                 color: V4::splat(1.0),
                 ..Default::default()
             },
             Vtx {
-                pos: V3([10.0, 10.0, 0.0]),
+                pos: V3([32.0, 32.0, 0.0]),
                 color: V4::splat(1.0),
                 ..Default::default()
             },
@@ -72,7 +72,7 @@ fn main() {
     let tex = gfx.tex_alloc();
     {
         let mut tmap = gfx.tex_map(tex);
-        tmap.write(&vec![0xFF00FFFF; 256 * 266]);
+        tmap.write(&vec![0xFFFF00FF; 256 * 266]);
     }
 
     let mut events = qd::ensure!(sdl.event_pump());
@@ -81,19 +81,34 @@ fn main() {
     let mut last = Instant::now();
 
     let mut scene = Scene::new();
+
     scene.add_node(Node {
-        kid: 0,
-        sib: 0,
-        mesh,
-        tex,
-        blend: V4::splat(1.0),
+        kid: 1,
+        sib: Node::NONE,
         local: Xform3::IDENTITY,
         world: Xform3::IDENTITY,
+        draw: Drawable::None,
     });
 
+    for i in 0..10 {
+        let mut local = Xform3::IDENTITY;
+        local.pos = V3([(32.0 * (i as f32)), 0.0, 0.0]);
+        scene.add_node(Node {
+            kid: Node::NONE,
+            sib: if i < 9 { i + 2 } else { Node::NONE },
+            local,
+            world: Xform3::IDENTITY,
+            draw: Drawable::Mesh {
+                hnd: mesh,
+                tex,
+                blend: V4::splat((10.0 - (i as f32)) / 10.0),
+            },
+        });
+    }
+
     let camera = Camera {
-        pos: V3([-10.0, 0.0, 1.0]),
-        at: V3([-10.0, 0.0, 0.0]),
+        pos: V3([-16.0, -16.0, 1.0]),
+        at: V3([-16.0, -16.0, 0.0]),
         proj: Proj::Ortho {
             size: UV2([1920, 1080]),
             near: 0.0,
@@ -115,8 +130,8 @@ fn main() {
 
         {
             let mut pass = gfx.pass(Target::Screen, &camera);
-            pass.clear();
-            pass.draw(Query::all(&scene));
+            pass.clear_all();
+            pass.draw(scene.all());
         }
 
         win.gl_swap_window();

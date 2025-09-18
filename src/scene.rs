@@ -1,9 +1,11 @@
-use std::{collections::VecDeque, iter::Filter, slice::Iter};
+use std::collections::VecDeque;
 
-use crate::math::{Concat, V4, Xform3};
+use crate::{
+    gfx::Drawable,
+    math::{Concat, Xform3},
+};
 
 pub struct Scene {
-    active_nodes: Vec<u32>,
     nodes: Vec<Node>,
     nodeq: VecDeque<(u32, Xform3)>,
 }
@@ -12,7 +14,6 @@ impl Scene {
     #[inline]
     pub fn new() -> Scene {
         Scene {
-            active_nodes: Vec::new(),
             nodes: Vec::new(),
             nodeq: VecDeque::new(),
         }
@@ -20,7 +21,6 @@ impl Scene {
 
     pub fn update(&mut self) {
         if !self.nodes.is_empty() {
-            self.active_nodes.clear();
             self.nodeq.push_back((0, Xform3::IDENTITY));
         }
         while let Some((mut id, ref xform)) = self.nodeq.pop_front() {
@@ -34,7 +34,6 @@ impl Scene {
                 if node.kid != Node::NONE {
                     self.nodeq.push_back((node.kid, world));
                 }
-                self.active_nodes.push(id);
                 id = node.sib;
                 if id == Node::NONE {
                     break;
@@ -53,17 +52,22 @@ impl Scene {
         }
         self.nodes.push(node);
     }
+
+    pub fn all<'a>(&'a self) -> impl Iterator<Item = (&'a Xform3, &'a Drawable)> {
+        self.nodes
+            .iter()
+            .filter(|node| node.is_active())
+            .map(|node| (&node.world, &node.draw))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Node {
     pub sib: u32,
     pub kid: u32,
-    pub mesh: u32,
-    pub tex: u32,
-    pub blend: V4,
     pub local: Xform3,
     pub world: Xform3,
+    pub draw: Drawable,
 }
 
 impl Node {
@@ -73,26 +77,5 @@ impl Node {
     #[inline]
     pub fn is_active(&self) -> bool {
         self.kid != Self::INACTIVE
-    }
-}
-
-pub struct Query<'a> {
-    iter: Filter<Iter<'a, Node>, fn(&&Node) -> bool>,
-}
-
-impl<'a> Query<'a> {
-    #[inline]
-    pub fn all(scene: &'a Scene) -> Query<'a> {
-        Query {
-            iter: scene.nodes.iter().filter(|n| n.is_active()),
-        }
-    }
-}
-
-impl<'a> Iterator for Query<'a> {
-    type Item = &'a Node;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
     }
 }
