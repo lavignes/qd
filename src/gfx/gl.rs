@@ -693,6 +693,8 @@ fn create_vao() -> GLuint {
 const VSHADER: &'static str = r#"
     #version 410 core
 
+    const uint NUM_INST_COMPONENTS = 6;
+
     uniform mat4 proj;
     uniform mat4 view;
 
@@ -709,27 +711,30 @@ const VSHADER: &'static str = r#"
     out vec2 tex_coord;
     out vec4 vtx_color;
 
-    mat4 fetchModel() {
+
+    mat4 fetchModel(uint offset) {
         mat4 model;
         for (uint i = 0; i < 4; i++) {
-            model[i] = texelFetch(sbo, ivec2(gl_InstanceID + i, store), 0);
+            model[i] = texelFetch(sbo, ivec2(offset + i, store), 0);
         }
         return model;
     }
 
-    vec4 fetchBlend() {
-        return texelFetch(sbo, ivec2(gl_InstanceID + 4, store), 0);
+    vec4 fetchBlend(uint offset) {
+        return texelFetch(sbo, ivec2(offset + 4, store), 0);
     }
 
-    uint fetchTex() {
-        return uint(texelFetch(sbo, ivec2(gl_InstanceID + 5, store), 0)[0]);
+    uint fetchTex(uint offset) {
+        return uint(texelFetch(sbo, ivec2(offset + 5, store), 0)[0]);
     }
 
     void main() {
-        mat4 model = fetchModel();
-        vec4 blend = fetchBlend();
+        uint offset = gl_InstanceID * NUM_INST_COMPONENTS;
 
-        tex = fetchTex();
+        mat4 model = fetchModel(offset);
+        vec4 blend = fetchBlend(offset);
+
+        tex = fetchTex(offset);
         vtx_color = color * blend;
         tex_coord = vec2(tx, ty);
 
