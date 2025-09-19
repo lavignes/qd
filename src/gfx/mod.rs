@@ -35,7 +35,7 @@ impl Gfx {
     }
 
     #[inline]
-    pub fn mesh_map(&mut self, hnd: u32) -> (BufMap<Vtx>, BufMap<u32>) {
+    pub fn mesh_map<'a>(&'a mut self, hnd: u32) -> (BufMap<'a, Vtx>, BufMap<'a, u32>) {
         #[cfg(feature = "gl")]
         self.gl.mesh_map(hnd)
     }
@@ -47,7 +47,7 @@ impl Gfx {
     }
 
     #[inline]
-    pub fn tex_map(&mut self, hnd: u32) -> TexMap {
+    pub fn tex_map<'a>(&'a mut self, hnd: u32) -> TexMap<'a> {
         #[cfg(feature = "gl")]
         self.gl.tex_map(hnd)
     }

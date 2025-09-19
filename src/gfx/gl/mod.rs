@@ -143,7 +143,7 @@ impl Gl {
     }
 
     #[inline]
-    pub fn mesh_map(&mut self, hnd: u32) -> (BufMap<'_, Vtx>, BufMap<'_, u32>) {
+    pub fn mesh_map<'a>(&'a mut self, hnd: u32) -> (BufMap<'a, Vtx>, BufMap<'a, u32>) {
         let &mut Self {
             ref mut vbo,
             ref mut ibo,
@@ -160,7 +160,7 @@ impl Gl {
     }
 
     #[inline]
-    pub fn tex_map(&mut self, hnd: u32) -> TexMap<'_> {
+    pub fn tex_map<'a>(&'a mut self, hnd: u32) -> TexMap<'a> {
         log::trace!("Mapping texture handle {hnd}",);
         TexMap {
             buf: &mut self.tbo,
@@ -198,6 +198,30 @@ impl<'a> Pass<'a> {
         }
     }
 
+    fn find_mesh_batch(&mut self, hnd: &u32) -> &mut MeshBatch {
+        match self.gl.mesh_batches.binary_search_by(|batch| {
+            // TODO: also need to check if the store is full
+            if !batch.insts.is_empty() {
+                batch.hnd.cmp(hnd)
+            } else {
+                std::cmp::Ordering::Greater
+            }
+        }) {
+            Ok(idx) => &mut self.gl.mesh_batches[idx],
+            Err(idx) => {
+                self.gl.mesh_batches.insert(
+                    idx,
+                    MeshBatch {
+                        hnd: *hnd,
+                        store: 0, // TODO: need to actually allocate different stores
+                        insts: Vec::new(),
+                    },
+                );
+                &mut self.gl.mesh_batches[idx]
+            }
+        }
+    }
+
     pub fn draw<'b, I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = (&'b Xform3, &'b Drawable)>,
@@ -206,27 +230,8 @@ impl<'a> Pass<'a> {
             match draw {
                 Drawable::None => {}
                 Drawable::Mesh { hnd, tex, blend } => {
-                    // TODO: not super efficient
-                    let batch = if let Some(batch) = self
-                        .gl
-                        .mesh_batches
-                        .iter_mut()
-                        // TODO: also need to check if the store is full
-                        .find(|batch| (batch.hnd == *hnd) || batch.insts.is_empty())
-                    {
-                        batch.hnd = *hnd;
-                        batch
-                    } else {
-                        self.gl.mesh_batches.push(MeshBatch {
-                            hnd: *hnd,
-                            store: 0, // TODO: need to actually allocate different stores
-                            insts: Vec::new(),
-                        });
-                        self.gl.mesh_batches.last_mut().unwrap()
-                    };
-
-                    batch.insts.push(MeshInst {
-                        world: Mat4::from(world).transposed(),
+                    self.find_mesh_batch(hnd).insts.push(MeshInst {
+                        world: Mat4::from(world),
                         blend: *blend,
                         tex: V4([*tex as f32, 0.0, 0.0, 0.0]),
                     });
@@ -712,73 +717,6 @@ fn create_vao() -> GLuint {
     hnd
 }
 
-const VSHADER: &'static str = r#"
-    #version 410 core
-
-    const uint NUM_INST_COMPONENTS = 6;
-
-    uniform mat4 proj;
-    uniform mat4 view;
-
-    uniform uint store;
-    uniform sampler1DArray sbo;
-
-    layout (location = 0) in vec3 pos;
-    layout (location = 1) in float tx;
-    layout (location = 2) in vec3 norm;
-    layout (location = 3) in float ty;
-    layout (location = 4) in vec4 color;
-
-    flat out uint tex;
-    out vec2 tex_coord;
-    out vec4 vtx_color;
-
-    mat4 fetchModel(uint offset) {
-        mat4 model;
-        for (uint i = 0; i < 4; i++) {
-            model[i] = texelFetch(sbo, ivec2(offset + i, store), 0);
-        }
-        return model;
-    }
-
-    vec4 fetchBlend(uint offset) {
-        return texelFetch(sbo, ivec2(offset + 4, store), 0);
-    }
-
-    uint fetchTex(uint offset) {
-        return uint(texelFetch(sbo, ivec2(offset + 5, store), 0)[0]);
-    }
-
-    void main() {
-        uint offset = gl_InstanceID * NUM_INST_COMPONENTS;
-
-        mat4 model = fetchModel(offset);
-        vec4 blend = fetchBlend(offset);
-
-        tex = fetchTex(offset);
-        vtx_color = color * blend;
-        tex_coord = vec2(tx, ty);
-
-        gl_Position = proj * view * model * vec4(pos, 1.0);
-    }
-"#;
-
-const FSHADER: &'static str = r#"
-    #version 410 core
-
-    uniform sampler2DArray tbo;
-
-    flat in uint tex;
-    in vec2 tex_coord;
-    in vec4 vtx_color;
-
-    out vec4 color;
-
-    void main() {
-        color = texture(tbo, vec3(tex_coord, tex)) * vtx_color;
-    }
-"#;
-
 fn compile_shader(kind: GLenum, src: &str) -> GLuint {
     let hnd;
     let err;
@@ -822,8 +760,8 @@ fn attach_shader(program: GLuint, shader: GLuint) {
 }
 
 fn compile_and_link_shaders() -> GLuint {
-    let vshader = compile_shader(gl::VERTEX_SHADER, VSHADER);
-    let fshader = compile_shader(gl::FRAGMENT_SHADER, FSHADER);
+    let vshader = compile_shader(gl::VERTEX_SHADER, include_str!("vert.glsl"));
+    let fshader = compile_shader(gl::FRAGMENT_SHADER, include_str!("frag.glsl"));
     let hnd;
     let err;
     unsafe {

@@ -33,7 +33,7 @@ fn main() {
 
     let gl_ctx = qd::ensure!(win.gl_create_context(), "Failed to create GL context: {}");
     qd::ensure!(win.gl_make_current(&gl_ctx));
-    qd::ensure!(video.gl_set_swap_interval(SwapInterval::Immediate));
+    qd::ensure!(video.gl_set_swap_interval(SwapInterval::VSync));
 
     gl::load_with(|proc| video.gl_get_proc_address(proc) as *const _);
 
