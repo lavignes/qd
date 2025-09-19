@@ -328,7 +328,7 @@ impl<T> Buf<T> {
     }
 
     #[inline]
-    fn map(&mut self, hnd: u32) -> BufMap<'_, T> {
+    fn map<'a>(&'a mut self, hnd: u32) -> BufMap<'a, T> {
         BufMap {
             inner: self.inner.map(hnd),
             _marker: PhantomData,
@@ -387,7 +387,7 @@ impl RawBuf {
     }
 
     #[inline]
-    fn map(&mut self, hnd: u32) -> RawMap<'_> {
+    fn map<'a>(&'a mut self, hnd: u32) -> RawMap<'a> {
         let alloc = self.used[hnd as usize].clone();
         log::trace!(
             "Mapping buffer handle {hnd} ({}:{})",
