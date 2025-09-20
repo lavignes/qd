@@ -21,10 +21,10 @@ impl Gfx {
     }
 
     #[inline]
-    pub fn pass<'a>(&'a mut self, target: Target, camera: &'a Camera) -> Pass<'a> {
+    pub fn pass<'a>(&'a mut self, settings: PassSettings<'a>) -> Pass<'a> {
         Pass {
             #[cfg(feature = "gl")]
-            gl: self.gl.pass(target, camera),
+            gl: self.gl.pass(settings),
         }
     }
 
@@ -51,6 +51,11 @@ impl Gfx {
         #[cfg(feature = "gl")]
         self.gl.tex_map(hnd)
     }
+}
+
+pub struct PassSettings<'a> {
+    pub target: Target,
+    pub camera: &'a Camera,
 }
 
 pub struct Pass<'a> {
@@ -141,6 +146,18 @@ pub enum Drawable {
     Mesh { hnd: u32, tex: u32, blend: V4 },
 }
 
+impl Drawable {
+    #[inline]
+    pub fn is_none(&self) -> bool {
+        matches!(self, Drawable::None)
+    }
+
+    #[inline]
+    pub fn is_some(&self) -> bool {
+        !self.is_none()
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default, Pod, Zeroable)]
 pub struct Vtx {
@@ -158,7 +175,7 @@ pub enum Target {
 
 #[derive(Clone, Copy)]
 pub struct Settings {
-    pub size: UV2,
+    pub screen_size: UV2,
 
     pub vtx_buffer_size: usize,
     pub idx_buffer_size: usize,

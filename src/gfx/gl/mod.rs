@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, mem, ops::Range, ptr};
+use std::{cmp::Ordering, marker::PhantomData, mem, ops::Range, ptr};
 
 use bytemuck::{NoUninit, Pod, Zeroable};
 use gl::types::{GLenum, GLint, GLintptr, GLsizei, GLsizeiptr, GLuint};
@@ -8,10 +8,11 @@ use crate::{
     mem::{Alloc, BitAlloc, BuddyAlloc, Handles},
 };
 
-use super::{Camera, Drawable, Settings, Target, Vtx};
+use super::{Drawable, PassSettings, Settings, Vtx};
 
+const SBO_INST_SIZE: usize = mem::size_of::<MeshInst>() / mem::size_of::<V4>();
 const SBO_SIZE: usize = 512;
-const SBO_DIM: usize = 2048;
+const SBO_DIM: usize = 64 * SBO_INST_SIZE;
 
 pub struct Gl {
     vbo: Buf<Vtx>,
@@ -52,10 +53,10 @@ impl Gl {
             tbo_size / 1024 / 1024
         );
 
-        let sbo = StoreBuf::new(SBO_SIZE);
+        let sbo = StoreBuf::new(SBO_DIM, SBO_SIZE);
         log::debug!(
             "SBO: {SBO_SIZE} stores ({} MiB)",
-            (SBO_DIM * mem::size_of::<V4>() * SBO_SIZE) / 1024 / 1024
+            (SBO_DIM * SBO_SIZE) / 1024 / 1024
         );
 
         let vao = create_vao();
@@ -94,7 +95,7 @@ impl Gl {
             gl::Uniform1i(utbo, 0);
             gl::Uniform1i(usbo, 1);
 
-            let IV2([w, h]) = settings.size.into();
+            let IV2([w, h]) = settings.screen_size.into();
             gl::Viewport(0, 0, w, h);
             gl::Enable(gl::DEPTH_TEST);
             gl::Enable(gl::CULL_FACE);
@@ -122,22 +123,18 @@ impl Gl {
     }
 
     #[inline]
-    pub fn pass<'a>(&'a mut self, target: Target, camera: &'a Camera) -> Pass<'a> {
-        let view = look_at(camera.pos, camera.at, V3::UP);
+    pub fn pass<'a>(&'a mut self, settings: PassSettings<'a>) -> Pass<'a> {
+        let view = look_at(settings.camera.pos, settings.camera.at, V3::UP);
         unsafe {
             gl::UniformMatrix4fv(
                 self.uproj,
                 1,
                 gl::FALSE,
-                Mat4::from(camera.proj).0.as_ptr() as _,
+                Mat4::from(settings.camera.proj).0.as_ptr() as _,
             );
             gl::UniformMatrix4fv(self.uview, 1, gl::FALSE, view.0.as_ptr() as _);
         }
-        Pass {
-            gl: self,
-            target,
-            camera,
-        }
+        Pass { gl: self, settings }
     }
 
     #[inline]
@@ -190,10 +187,16 @@ struct MeshBatch {
     insts: Vec<MeshInst>,
 }
 
+impl MeshBatch {
+    #[inline]
+    fn is_full(&self) -> bool {
+        (self.insts.len() * SBO_INST_SIZE) >= SBO_DIM
+    }
+}
+
 pub struct Pass<'a> {
     gl: &'a mut Gl,
-    target: Target,
-    camera: &'a Camera,
+    settings: PassSettings<'a>,
 }
 
 impl<'a> Pass<'a> {
@@ -205,14 +208,16 @@ impl<'a> Pass<'a> {
         }
     }
 
+    #[inline]
     fn find_mesh_batch(&mut self, hnd: &u32) -> &mut MeshBatch {
         match self.gl.mesh_batches.binary_search_by(|batch| {
-            // TODO: also need to check if the store is full
-            if !batch.insts.is_empty() {
-                batch.hnd.cmp(hnd)
-            } else {
-                std::cmp::Ordering::Greater
+            if batch.insts.is_empty() {
+                return Ordering::Greater;
             }
+            if batch.is_full() {
+                return Ordering::Less;
+            }
+            batch.hnd.cmp(hnd)
         }) {
             Ok(idx) => &mut self.gl.mesh_batches[idx],
             Err(idx) => {
@@ -220,7 +225,7 @@ impl<'a> Pass<'a> {
                     idx,
                     MeshBatch {
                         hnd: *hnd,
-                        store: 0, // TODO: need to actually allocate different stores
+                        store: self.gl.sbo.alloc(),
                         insts: Vec::new(),
                     },
                 );
@@ -250,37 +255,17 @@ impl<'a> Pass<'a> {
 
 impl<'a> Drop for Pass<'a> {
     fn drop(&mut self) {
-        unsafe {
-            gl::ActiveTexture(gl::TEXTURE1);
-        }
         for batch in &mut self.gl.mesh_batches {
             if batch.insts.is_empty() {
                 break;
             }
-            const NUM_INST_COMPONENTS: usize = mem::size_of::<MeshInst>() / mem::size_of::<V4>();
-            let mut err;
-            unsafe {
-                gl::TexSubImage2D(
-                    gl::TEXTURE_1D_ARRAY,
-                    0,
-                    0,
-                    batch.store as GLint,
-                    (batch.insts.len() * NUM_INST_COMPONENTS) as GLsizei,
-                    1,
-                    gl::RGBA,
-                    gl::FLOAT,
-                    batch.insts.as_ptr() as _,
-                );
-                err = gl::GetError();
-            }
-            if err != gl::NO_ERROR {
-                crate::fatal!(
-                    "Failed to transfer storage handle {} to storage: {err:X}",
-                    batch.store
-                );
-            }
+            self.gl
+                .sbo
+                .map(batch.store)
+                .write(bytemuck::cast_slice(&batch.insts));
             let (_, ihnd) = self.gl.meshes[batch.hnd as usize];
             let range = &self.gl.ibo.inner.allocs.items[ihnd as usize].range;
+            let err;
             unsafe {
                 gl::Uniform1ui(self.gl.ustore, batch.store);
                 gl::DrawElementsInstancedBaseVertex(
@@ -377,6 +362,7 @@ impl RawBuf {
         }
     }
 
+    #[inline]
     fn alloc(&mut self, size: usize) -> u32 {
         if let Some(alloc) = self.alloc.alloc(size) {
             return self.allocs.track(alloc) as u32;
@@ -384,6 +370,7 @@ impl RawBuf {
         crate::fatal!("Out of contiguous buffer space");
     }
 
+    #[inline]
     fn free(&mut self, hnd: u32) {
         self.allocs.untrack(hnd as usize);
     }
@@ -541,6 +528,7 @@ impl TexBuf {
         }
     }
 
+    #[inline]
     fn alloc(&mut self) -> u32 {
         if let Some(hnd) = self.alloc.alloc() {
             return hnd as u32;
@@ -548,6 +536,7 @@ impl TexBuf {
         crate::fatal!("Out of texture space");
     }
 
+    #[inline]
     fn free(&mut self, hnd: u32) {
         self.alloc.free(hnd as usize);
     }
@@ -614,7 +603,7 @@ struct StoreBuf {
 }
 
 impl StoreBuf {
-    fn new(size: usize) -> Self {
+    fn new(dim: usize, size: usize) -> Self {
         let mut hnd = 0;
         let mut err;
         unsafe {
@@ -631,7 +620,7 @@ impl StoreBuf {
                 gl::TEXTURE_1D_ARRAY,
                 1,
                 gl::RGBA32F, // 1 `V4` per texel
-                SBO_DIM as GLsizei,
+                dim as GLsizei,
                 size as GLsizei,
             );
             err = gl::GetError();
@@ -645,6 +634,7 @@ impl StoreBuf {
         }
     }
 
+    #[inline]
     fn alloc(&mut self) -> u32 {
         if let Some(hnd) = self.alloc.alloc() {
             return hnd as u32;
@@ -652,8 +642,14 @@ impl StoreBuf {
         crate::fatal!("Out of storage space");
     }
 
+    #[inline]
     fn free(&mut self, hnd: u32) {
         self.alloc.free(hnd as usize);
+    }
+
+    #[inline]
+    fn map<'a>(&'a mut self, hnd: u32) -> StoreMap<'a> {
+        StoreMap { buf: self, hnd }
     }
 }
 
@@ -667,6 +663,38 @@ impl Drop for StoreBuf {
         }
         if err != gl::NO_ERROR {
             crate::fatal!("Failed to free storage: {err:X}");
+        }
+    }
+}
+
+struct StoreMap<'a> {
+    buf: &'a mut StoreBuf,
+    hnd: u32,
+}
+
+impl<'a> StoreMap<'a> {
+    pub fn write(&mut self, data: &[V4]) {
+        let err;
+        unsafe {
+            gl::ActiveTexture(gl::TEXTURE1);
+            gl::TexSubImage2D(
+                gl::TEXTURE_1D_ARRAY,
+                0,
+                0,
+                self.hnd as GLint,
+                data.len() as GLsizei,
+                1,
+                gl::RGBA,
+                gl::FLOAT,
+                data.as_ptr() as _,
+            );
+            err = gl::GetError();
+        }
+        if err != gl::NO_ERROR {
+            crate::fatal!(
+                "Failed to transfer storage handle {} to storage: {err:X}",
+                self.hnd
+            );
         }
     }
 }

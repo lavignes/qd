@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use qd::{
-    gfx::{Camera, Drawable, Gfx, Proj, Target, Vtx},
+    gfx::{Camera, Drawable, Gfx, PassSettings, Proj, Settings, Target, Vtx},
     math::{UV2, V3, V4, Xform3},
     scene::{Node, Scene},
 };
@@ -37,8 +37,8 @@ fn main() {
 
     gl::load_with(|proc| video.gl_get_proc_address(proc) as *const _);
 
-    let mut gfx = Gfx::new(&qd::gfx::Settings {
-        size: UV2([1920, 1080]),
+    let mut gfx = Gfx::new(&Settings {
+        screen_size: UV2([1920, 1080]),
 
         vtx_buffer_size: 1024 * 1024 * 4,
         idx_buffer_size: 1024 * 1024 * 16,
@@ -137,12 +137,23 @@ fn main() {
             }
         }
 
+        for node in scene.active_mut() {
+            node.local.pos.0[1] += unsafe { sdl2::libc::rand() % 4 } as f32;
+            if node.local.pos.0[1] > 1080.0 {
+                node.local.pos.0[1] = -32.0;
+            }
+        }
+
         scene.update();
 
         {
-            let mut pass = gfx.pass(Target::Screen, &camera);
+            let mut pass = gfx.pass(PassSettings {
+                target: Target::Screen,
+                camera: &camera,
+            });
+
             pass.clear_all();
-            pass.draw(scene.all());
+            pass.draw(scene.drawables());
         }
 
         win.gl_swap_window();

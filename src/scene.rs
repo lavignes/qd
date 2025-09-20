@@ -53,10 +53,14 @@ impl Scene {
         self.nodes.push(node);
     }
 
-    pub fn all<'a>(&'a self) -> impl Iterator<Item = (&'a Xform3, &'a Drawable)> {
+    pub fn active_mut(&mut self) -> impl Iterator<Item = &mut Node> {
+        self.nodes.iter_mut().filter(|node| node.is_active())
+    }
+
+    pub fn drawables<'a>(&'a self) -> impl Iterator<Item = (&'a Xform3, &'a Drawable)> {
         self.nodes
             .iter()
-            .filter(|node| node.is_active())
+            .filter(|node| node.is_active() && node.draw.is_some())
             .map(|node| (&node.world, &node.draw))
     }
 }

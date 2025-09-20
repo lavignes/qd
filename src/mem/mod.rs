@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, mem, ops::Range};
+use std::{collections::VecDeque, ops::Range};
 
 #[derive(Default)]
 pub struct Alloc {
