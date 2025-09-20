@@ -1,3 +1,5 @@
+#![deny(unused_imports)]
+
 pub mod gfx;
 pub mod log;
 pub mod math;

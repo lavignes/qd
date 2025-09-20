@@ -83,7 +83,6 @@ pub struct MetaAlloc {
 }
 
 pub struct MetaAllocator {
-    cap: usize,
     min_order: usize, // smallest allocation size: 2^(min_order)
     max_order: usize, // largest allocation size: 2^(max_order)
     free_lists: Vec<VecDeque<usize>>,
@@ -99,7 +98,6 @@ impl MetaAllocator {
         let mut free_lists = vec![VecDeque::new(); max_order + 1];
         free_lists[max_order].push_back(0);
         Self {
-            cap: size,
             min_order,
             max_order,
             free_lists,

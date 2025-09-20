@@ -5,7 +5,7 @@ use gl::types::{GLenum, GLint, GLintptr, GLsizei, GLsizeiptr, GLuint};
 
 use crate::{
     math::{Cross, Dot, IV2, Mat4, V3, V4, Xform3},
-    mem::{BitMap, HandlePool, Handles, MetaAlloc, MetaAllocator},
+    mem::{BitMap, Handles, MetaAlloc, MetaAllocator},
 };
 
 use super::{Drawable, PassSettings, Settings, Vtx};
@@ -249,7 +249,7 @@ impl<'a> Pass<'a> {
     where
         I: IntoIterator<Item = (&'b Xform3, &'b Drawable)>,
     {
-        for (world, draw) in iter.into_iter() {
+        for (world, draw) in iter {
             match draw {
                 Drawable::None => {}
                 Drawable::Mesh { hnd, tex, blend } => {
