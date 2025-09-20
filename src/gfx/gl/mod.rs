@@ -5,7 +5,7 @@ use gl::types::{GLenum, GLint, GLintptr, GLsizei, GLsizeiptr, GLuint};
 
 use crate::{
     math::{Cross, Dot, IV2, Mat4, V3, V4, Xform3},
-    mem::{Alloc, BitAlloc, BuddyAlloc, HandlePool, Handles},
+    mem::{BitMap, HandlePool, Handles, MetaAlloc, MetaAllocator},
 };
 
 use super::{Drawable, PassSettings, Settings, Vtx};
@@ -347,8 +347,8 @@ impl<T> Buf<T> {
 struct RawBuf {
     hnd: GLuint,
     target: GLenum,
-    alloc: BuddyAlloc,
-    allocs: Handles<Alloc>,
+    alloc: MetaAllocator,
+    allocs: Handles<MetaAlloc>,
 }
 
 impl RawBuf {
@@ -373,7 +373,7 @@ impl RawBuf {
         Self {
             hnd,
             target,
-            alloc: BuddyAlloc::new(size, 512),
+            alloc: MetaAllocator::new(size, 512),
             allocs: Handles::new(),
         }
     }
@@ -481,7 +481,7 @@ impl<'a, T> BufMap<'a, T> {
 struct TexBuf {
     hnd: GLuint,
     dim: usize,
-    alloc: BitAlloc,
+    alloc: BitMap,
 }
 
 impl TexBuf {
@@ -540,13 +540,13 @@ impl TexBuf {
         Self {
             hnd,
             dim,
-            alloc: BitAlloc::new(size),
+            alloc: BitMap::new(size),
         }
     }
 
     #[inline]
     fn alloc(&mut self) -> u32 {
-        if let Some(hnd) = self.alloc.alloc() {
+        if let Some(hnd) = self.alloc.set_any() {
             return hnd as u32;
         }
         crate::fatal!("Out of texture space");
@@ -554,7 +554,7 @@ impl TexBuf {
 
     #[inline]
     fn free(&mut self, hnd: u32) {
-        self.alloc.free(hnd as usize);
+        self.alloc.unset(hnd as usize);
     }
 }
 
@@ -615,7 +615,7 @@ impl<'a> Drop for TexMap<'a> {
 
 struct StoreBuf {
     hnd: GLuint,
-    alloc: BitAlloc,
+    alloc: BitMap,
 }
 
 impl StoreBuf {
@@ -646,13 +646,13 @@ impl StoreBuf {
         }
         Self {
             hnd,
-            alloc: BitAlloc::new(size),
+            alloc: BitMap::new(size),
         }
     }
 
     #[inline]
     fn alloc(&mut self) -> u32 {
-        if let Some(hnd) = self.alloc.alloc() {
+        if let Some(hnd) = self.alloc.set_any() {
             return hnd as u32;
         }
         crate::fatal!("Out of storage space");
@@ -660,7 +660,7 @@ impl StoreBuf {
 
     #[inline]
     fn free(&mut self, hnd: u32) {
-        self.alloc.free(hnd as usize);
+        self.alloc.unset(hnd as usize);
     }
 
     #[inline]

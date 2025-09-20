@@ -1,11 +1,5 @@
 use std::{collections::VecDeque, ops::Range};
 
-#[derive(Default)]
-pub struct Alloc {
-    pub range: Range<usize>,
-    // TODO: generations for double free detection?
-}
-
 pub struct Handles<T> {
     pub items: Vec<T>,
     free_list: Vec<usize>,
@@ -82,14 +76,20 @@ impl<T: Default> HandlePool<T> {
     }
 }
 
-pub struct BuddyAlloc {
+#[derive(Default)]
+pub struct MetaAlloc {
+    pub range: Range<usize>,
+    // TODO: generations for double free detection?
+}
+
+pub struct MetaAllocator {
     cap: usize,
     min_order: usize, // smallest allocation size: 2^(min_order)
     max_order: usize, // largest allocation size: 2^(max_order)
     free_lists: Vec<VecDeque<usize>>,
 }
 
-impl BuddyAlloc {
+impl MetaAllocator {
     #[inline]
     pub fn new(size: usize, min_size: usize) -> Self {
         let size = size.next_power_of_two();
@@ -106,7 +106,7 @@ impl BuddyAlloc {
         }
     }
 
-    pub fn alloc(&mut self, size: usize) -> Option<Alloc> {
+    pub fn alloc(&mut self, size: usize) -> Option<MetaAlloc> {
         let order = size
             .max(self.min_order)
             .next_power_of_two()
@@ -125,7 +125,7 @@ impl BuddyAlloc {
             }
         }
         if let Some(offset) = found_offset {
-            Some(Alloc {
+            Some(MetaAlloc {
                 range: offset..(offset + (1 << order)),
             })
         } else {
@@ -133,7 +133,7 @@ impl BuddyAlloc {
         }
     }
 
-    pub fn free(&mut self, alloc: Alloc) {
+    pub fn free(&mut self, alloc: MetaAlloc) {
         let order = alloc
             .range
             .len()
@@ -159,12 +159,12 @@ impl BuddyAlloc {
     }
 }
 
-pub struct BitAlloc {
+pub struct BitMap {
     words: Vec<u64>,
     free_list: Vec<usize>,
 }
 
-impl BitAlloc {
+impl BitMap {
     const BITS: usize = u64::BITS as usize;
 
     #[inline]
@@ -176,7 +176,7 @@ impl BitAlloc {
         }
     }
 
-    pub fn alloc(&mut self) -> Option<usize> {
+    pub fn set_any(&mut self) -> Option<usize> {
         if let Some(idx) = self.free_list.pop() {
             let word_idx = idx / Self::BITS;
             let bit_idx = idx % Self::BITS;
@@ -184,22 +184,22 @@ impl BitAlloc {
             Some(idx)
         } else {
             for (word_idx, word) in self.words.iter_mut().enumerate() {
-                if *word != u64::MAX {
-                    let bit_idx = word.trailing_ones() as usize;
-                    *word |= 1 << bit_idx;
-                    return Some((word_idx * Self::BITS) + bit_idx);
+                if *word == u64::MAX {
+                    continue;
                 }
+                let bit_idx = word.trailing_ones() as usize;
+                *word |= 1 << bit_idx;
+                return Some((word_idx * Self::BITS) + bit_idx);
             }
             None
         }
     }
 
-    pub fn free(&mut self, idx: usize) {
+    #[inline]
+    pub fn unset(&mut self, idx: usize) {
         let word_idx = idx / Self::BITS;
         let bit_idx = idx % Self::BITS;
-        if (word_idx < self.words.len()) && ((self.words[word_idx] & (1 << bit_idx)) != 0) {
-            self.words[word_idx] &= !(1 << bit_idx);
-            self.free_list.push(idx);
-        }
+        self.words[word_idx] &= !(1 << bit_idx);
+        self.free_list.push(idx);
     }
 }
