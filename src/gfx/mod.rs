@@ -159,4 +159,9 @@ pub enum Target {
 #[derive(Clone, Copy)]
 pub struct Settings {
     pub size: UV2,
+
+    pub vtx_buffer_size: usize,
+    pub idx_buffer_size: usize,
+    pub tex_dim: usize,
+    pub tex_count: usize,
 }

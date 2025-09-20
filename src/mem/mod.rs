@@ -92,8 +92,8 @@ pub struct BuddyAlloc {
 impl BuddyAlloc {
     #[inline]
     pub fn new(size: usize, min_size: usize) -> Self {
-        assert!(size.is_power_of_two());
-        assert!(min_size.is_power_of_two());
+        let size = size.next_power_of_two();
+        let min_size = min_size.next_power_of_two();
         let max_order = size.trailing_zeros() as usize;
         let min_order = min_size.trailing_zeros() as usize;
         let mut free_lists = vec![VecDeque::new(); max_order + 1];

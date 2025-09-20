@@ -39,6 +39,11 @@ fn main() {
 
     let mut gfx = Gfx::new(&qd::gfx::Settings {
         size: UV2([1920, 1080]),
+
+        vtx_buffer_size: 1024 * 1024 * 4,
+        idx_buffer_size: 1024 * 1024 * 16,
+        tex_dim: 256,
+        tex_count: 512,
     });
 
     let mesh = gfx.mesh_alloc(4, 6);

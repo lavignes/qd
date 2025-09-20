@@ -10,11 +10,6 @@ use crate::{
 
 use super::{Camera, Drawable, Settings, Target, Vtx};
 
-const VBO_SIZE: usize = 536870912;
-const IBO_SIZE: usize = 536870912;
-const TBO_SIZE: usize = 512;
-const TEX_DIM: usize = 256;
-
 const SBO_SIZE: usize = 512;
 const SBO_DIM: usize = 2048;
 
@@ -39,15 +34,24 @@ pub struct Gl {
 impl Gl {
     pub fn new(settings: &Settings) -> Self {
         log::trace!("Initializing Gfx...");
-        let vbo = Buf::new(gl::ARRAY_BUFFER, VBO_SIZE);
-        log::debug!("VBO: {} MiB", VBO_SIZE / 1024 / 1024);
-        let ibo = Buf::new(gl::ELEMENT_ARRAY_BUFFER, IBO_SIZE);
-        log::debug!("IBO: {} MiB", IBO_SIZE / 1024 / 1024);
-        let tbo = TexBuf::new(TBO_SIZE);
+
+        let vbo = Buf::new(gl::ARRAY_BUFFER, settings.vtx_buffer_size);
+        let vbo_size = (settings.vtx_buffer_size * mem::size_of::<Vtx>()).next_power_of_two();
+        log::debug!("VBO: {} MiB", vbo_size / 1024 / 1024);
+
+        let ibo = Buf::new(gl::ELEMENT_ARRAY_BUFFER, settings.idx_buffer_size);
+        let ibo_size = (settings.idx_buffer_size * mem::size_of::<u32>()).next_power_of_two();
+        log::debug!("IBO: {} MiB", ibo_size / 1024 / 1024);
+
+        let tbo = TexBuf::new(settings.tex_dim, settings.tex_count);
+        let tbo_size =
+            settings.tex_dim * settings.tex_dim * settings.tex_count * mem::size_of::<u32>();
         log::debug!(
-            "TBO: {TBO_SIZE} textures ({} MiB)",
-            (TEX_DIM * TEX_DIM * mem::size_of::<u32>() * TBO_SIZE) / 1024 / 1024
+            "TBO: {} textures ({} MiB)",
+            settings.tex_count,
+            tbo_size / 1024 / 1024
         );
+
         let sbo = StoreBuf::new(SBO_SIZE);
         log::debug!(
             "SBO: {SBO_SIZE} stores ({} MiB)",
@@ -320,7 +324,7 @@ impl<T> Buf<T> {
     #[inline]
     fn new(target: GLenum, size: usize) -> Self {
         Self {
-            inner: RawBuf::new(target, size),
+            inner: RawBuf::new(target, size * mem::size_of::<T>()),
             _marker: PhantomData,
         }
     }
@@ -473,11 +477,12 @@ impl<'a, T> BufMap<'a, T> {
 
 struct TexBuf {
     hnd: GLuint,
+    dim: usize,
     alloc: BitAlloc,
 }
 
 impl TexBuf {
-    fn new(size: usize) -> Self {
+    fn new(dim: usize, size: usize) -> Self {
         let mut hnd = 0;
         let mut err;
         unsafe {
@@ -494,8 +499,8 @@ impl TexBuf {
                 gl::TEXTURE_2D_ARRAY,
                 1,
                 gl::RGBA8,
-                TEX_DIM as GLsizei,
-                TEX_DIM as GLsizei,
+                dim as GLsizei,
+                dim as GLsizei,
                 size as GLsizei,
             );
             err = gl::GetError();
@@ -531,6 +536,7 @@ impl TexBuf {
         }
         Self {
             hnd,
+            dim,
             alloc: BitAlloc::new(size),
         }
     }
@@ -577,8 +583,8 @@ impl<'a> TexMap<'a> {
                 0,
                 0,
                 self.hnd as GLint,
-                TEX_DIM as GLsizei,
-                TEX_DIM as GLsizei,
+                self.buf.dim as GLsizei,
+                self.buf.dim as GLsizei,
                 1,
                 gl::RGBA,
                 gl::UNSIGNED_BYTE,
