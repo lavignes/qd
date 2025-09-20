@@ -31,7 +31,8 @@ vec4 fetchBlend(uint offset) {
 }
 
 uint fetchTex(uint offset) {
-    return uint(texelFetch(sbo, ivec2(offset + 5, store), 0)[0]);
+    vec4 texel = texelFetch(sbo, ivec2(offset + 5, store), 0);
+    return uint(texel.x);
 }
 
 void main() {

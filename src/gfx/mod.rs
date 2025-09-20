@@ -35,6 +35,12 @@ impl Gfx {
     }
 
     #[inline]
+    pub fn mesh_free(&mut self, hnd: u32) {
+        #[cfg(feature = "gl")]
+        self.gl.mesh_free(hnd)
+    }
+
+    #[inline]
     pub fn mesh_map<'a>(&'a mut self, hnd: u32) -> (BufMap<'a, Vtx>, BufMap<'a, u32>) {
         #[cfg(feature = "gl")]
         self.gl.mesh_map(hnd)
@@ -44,6 +50,12 @@ impl Gfx {
     pub fn tex_alloc(&mut self) -> u32 {
         #[cfg(feature = "gl")]
         self.gl.tex_alloc()
+    }
+
+    #[inline]
+    pub fn tex_free(&mut self, hnd: u32) {
+        #[cfg(feature = "gl")]
+        self.gl.tex_free(hnd)
     }
 
     #[inline]

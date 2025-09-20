@@ -5,14 +5,14 @@ use gl::types::{GLenum, GLint, GLintptr, GLsizei, GLsizeiptr, GLuint};
 
 use crate::{
     math::{Cross, Dot, IV2, Mat4, V3, V4, Xform3},
-    mem::{Alloc, BitAlloc, BuddyAlloc, Handles},
+    mem::{Alloc, BitAlloc, BuddyAlloc, HandlePool, Handles},
 };
 
 use super::{Drawable, PassSettings, Settings, Vtx};
 
 const SBO_INST_SIZE: usize = mem::size_of::<MeshInst>() / mem::size_of::<V4>();
 const SBO_SIZE: usize = 512;
-const SBO_DIM: usize = 64 * SBO_INST_SIZE;
+const SBO_DIM: usize = 128 * SBO_INST_SIZE;
 
 pub struct Gl {
     vbo: Buf<Vtx>,
@@ -28,7 +28,7 @@ pub struct Gl {
     usbo: GLint,
     ustore: GLint,
 
-    meshes: Vec<(u32, u32)>,
+    meshes: Handles<(u32, u32)>,
     mesh_batches: Vec<MeshBatch>,
 }
 
@@ -56,7 +56,7 @@ impl Gl {
         let sbo = StoreBuf::new(SBO_DIM, SBO_SIZE);
         log::debug!(
             "SBO: {SBO_SIZE} stores ({} MiB)",
-            (SBO_DIM * SBO_SIZE) / 1024 / 1024
+            (SBO_DIM * mem::size_of::<V4>() * SBO_SIZE) / 1024 / 1024
         );
 
         let vao = create_vao();
@@ -117,7 +117,7 @@ impl Gl {
             usbo,
             ustore,
 
-            meshes: Vec::new(),
+            meshes: Handles::new(),
             mesh_batches: Vec::new(),
         }
     }
@@ -141,9 +141,15 @@ impl Gl {
     pub fn mesh_alloc(&mut self, vtxs: usize, idxs: usize) -> u32 {
         let vhnd = self.vbo.alloc(vtxs);
         let ihnd = self.ibo.alloc(idxs);
-        let hnd = self.meshes.len();
-        self.meshes.push((vhnd, ihnd));
-        hnd as u32
+        self.meshes.track((vhnd, ihnd)) as u32
+    }
+
+    #[inline]
+    pub fn mesh_free(&mut self, hnd: u32) {
+        let (vhnd, ihnd) = self.meshes.items[hnd as usize];
+        self.vbo.free(vhnd);
+        self.ibo.free(ihnd);
+        self.meshes.untrack(hnd as usize);
     }
 
     #[inline]
@@ -154,13 +160,18 @@ impl Gl {
             ref meshes,
             ..
         } = self;
-        let (vhnd, ihnd) = meshes[hnd as usize];
+        let (vhnd, ihnd) = meshes.items[hnd as usize];
         (vbo.map(vhnd), ibo.map(ihnd))
     }
 
     #[inline]
     pub fn tex_alloc(&mut self) -> u32 {
         self.tbo.alloc()
+    }
+
+    #[inline]
+    pub fn tex_free(&mut self, hnd: u32) {
+        self.tbo.free(hnd);
     }
 
     #[inline]
@@ -263,7 +274,7 @@ impl<'a> Drop for Pass<'a> {
                 .sbo
                 .map(batch.store)
                 .write(bytemuck::cast_slice(&batch.insts));
-            let (_, ihnd) = self.gl.meshes[batch.hnd as usize];
+            let (_, ihnd) = self.gl.meshes.items[batch.hnd as usize];
             let range = &self.gl.ibo.inner.allocs.items[ihnd as usize].range;
             let err;
             unsafe {
@@ -317,6 +328,11 @@ impl<T> Buf<T> {
     #[inline]
     fn alloc(&mut self, size: usize) -> u32 {
         self.inner.alloc(size * mem::size_of::<T>())
+    }
+
+    #[inline]
+    fn free(&mut self, hnd: u32) {
+        self.inner.free(hnd);
     }
 
     #[inline]
