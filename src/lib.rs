@@ -1,6 +1,7 @@
 pub mod gfx;
 pub mod log;
 pub mod math;
+pub mod mem;
 pub mod scene;
 
 /// Log a FATAL error and exit the progam.

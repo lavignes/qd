@@ -3,7 +3,10 @@ use std::{marker::PhantomData, mem, ops::Range, ptr};
 use bytemuck::{NoUninit, Pod, Zeroable};
 use gl::types::{GLenum, GLint, GLintptr, GLsizei, GLsizeiptr, GLuint};
 
-use crate::math::{Cross, Dot, IV2, Mat4, V3, V4, Xform3};
+use crate::{
+    math::{Cross, Dot, IV2, Mat4, V3, V4, Xform3},
+    mem::{Alloc, BitAlloc, BuddyAlloc, Handles},
+};
 
 use super::{Camera, Drawable, Settings, Target, Vtx};
 
@@ -273,7 +276,7 @@ impl<'a> Drop for Pass<'a> {
                 );
             }
             let (_, ihnd) = self.gl.meshes[batch.hnd as usize];
-            let range = &self.gl.ibo.inner.used[ihnd as usize];
+            let range = &self.gl.ibo.inner.allocs.items[ihnd as usize].range;
             unsafe {
                 gl::Uniform1ui(self.gl.ustore, batch.store);
                 gl::DrawElementsInstancedBaseVertex(
@@ -339,10 +342,8 @@ impl<T> Buf<T> {
 struct RawBuf {
     hnd: GLuint,
     target: GLenum,
-    len: usize,
-    cap: usize,
-    used: Vec<Range<usize>>,
-    free: Vec<Range<usize>>,
+    alloc: BuddyAlloc,
+    allocs: Handles<Alloc>,
 }
 
 impl RawBuf {
@@ -367,37 +368,34 @@ impl RawBuf {
         Self {
             hnd,
             target,
-            len: 0,
-            cap: size,
-            used: Vec::new(),
-            free: vec![0..size],
+            alloc: BuddyAlloc::new(size, 512),
+            allocs: Handles::new(),
         }
     }
 
     fn alloc(&mut self, size: usize) -> u32 {
-        for alloc in self.free.iter_mut() {
-            if alloc.len() >= size {
-                let hnd = self.used.len();
-                self.used.push(alloc.start..(alloc.start + size));
-                alloc.start += size;
-                return hnd as u32;
-            }
+        if let Some(alloc) = self.alloc.alloc(size) {
+            return self.allocs.track(alloc) as u32;
         }
         crate::fatal!("Out of contiguous buffer space");
     }
 
+    fn free(&mut self, hnd: u32) {
+        self.allocs.untrack(hnd as usize);
+    }
+
     #[inline]
     fn map<'a>(&'a mut self, hnd: u32) -> RawMap<'a> {
-        let alloc = self.used[hnd as usize].clone();
+        let range = self.allocs.items[hnd as usize].range.clone();
         log::trace!(
             "Mapping buffer handle {hnd} ({}:{})",
-            alloc.start,
-            alloc.len()
+            range.start,
+            range.len()
         );
         RawMap {
             buf: self,
             hnd,
-            alloc,
+            range,
         }
     }
 }
@@ -419,7 +417,7 @@ impl Drop for RawBuf {
 struct RawMap<'a> {
     buf: &'a mut RawBuf,
     hnd: u32,
-    alloc: Range<usize>,
+    range: Range<usize>,
 }
 
 impl<'a> RawMap<'a> {
@@ -429,8 +427,8 @@ impl<'a> RawMap<'a> {
             gl::BindBuffer(self.buf.target, self.buf.hnd);
             gl::BufferSubData(
                 self.buf.target,
-                self.alloc.start as GLintptr,
-                self.alloc.len() as GLsizeiptr,
+                self.range.start as GLintptr,
+                self.range.len() as GLsizeiptr,
                 data.as_ptr() as _,
             );
             err = gl::GetError();
@@ -439,8 +437,8 @@ impl<'a> RawMap<'a> {
             crate::fatal!(
                 "Failed to transfer buffer handle {} ({}:{}) to buffer: {err:X}",
                 self.hnd,
-                self.alloc.start,
-                self.alloc.len()
+                self.range.start,
+                self.range.len()
             );
         }
     }
@@ -452,8 +450,8 @@ impl<'a> Drop for RawMap<'a> {
         log::trace!(
             "Unmapping buffer handle {} ({}:{})",
             self.hnd,
-            self.alloc.start,
-            self.alloc.len()
+            self.range.start,
+            self.range.len()
         );
     }
 }
@@ -475,10 +473,7 @@ impl<'a, T> BufMap<'a, T> {
 
 struct TexBuf {
     hnd: GLuint,
-    len: usize,
-    cap: usize,
-    used: Vec<Range<usize>>,
-    free: Vec<Range<usize>>,
+    alloc: BitAlloc,
 }
 
 impl TexBuf {
@@ -536,23 +531,19 @@ impl TexBuf {
         }
         Self {
             hnd,
-            len: 0,
-            cap: size,
-            used: Vec::new(),
-            free: vec![0..size],
+            alloc: BitAlloc::new(size),
         }
     }
 
     fn alloc(&mut self) -> u32 {
-        for alloc in self.free.iter_mut() {
-            if alloc.len() > 0 {
-                let hnd = self.used.len();
-                self.used.push(alloc.start..(alloc.start + 1));
-                alloc.start += 1;
-                return hnd as u32;
-            }
+        if let Some(hnd) = self.alloc.alloc() {
+            return hnd as u32;
         }
         crate::fatal!("Out of texture space");
+    }
+
+    fn free(&mut self, hnd: u32) {
+        self.alloc.free(hnd as usize);
     }
 }
 
@@ -613,10 +604,7 @@ impl<'a> Drop for TexMap<'a> {
 
 struct StoreBuf {
     hnd: GLuint,
-    len: usize,
-    cap: usize,
-    used: Vec<Range<usize>>,
-    free: Vec<Range<usize>>,
+    alloc: BitAlloc,
 }
 
 impl StoreBuf {
@@ -647,23 +635,19 @@ impl StoreBuf {
         }
         Self {
             hnd,
-            len: 0,
-            cap: size,
-            used: Vec::new(),
-            free: vec![0..size],
+            alloc: BitAlloc::new(size),
         }
     }
 
     fn alloc(&mut self) -> u32 {
-        for alloc in self.free.iter_mut() {
-            if alloc.len() > 0 {
-                let hnd = self.used.len();
-                self.used.push(alloc.start..(alloc.start + 1));
-                alloc.start += 1;
-                return hnd as u32;
-            }
+        if let Some(hnd) = self.alloc.alloc() {
+            return hnd as u32;
         }
         crate::fatal!("Out of storage space");
+    }
+
+    fn free(&mut self, hnd: u32) {
+        self.alloc.free(hnd as usize);
     }
 }
 
